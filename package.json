@@ -1,0 +1,17 @@
+{
+  "version": "1.0.0",
+  "name": "cordova-plugin-saveimage",
+  "description": "",
+  "license": "MIT",
+  "repo": "https://github.com/gecsbernat/cordova-plugin-saveimage",
+  "issue": "",
+  "keywords": [],
+  "platforms": [
+    "android",
+    "ios"
+  ],
+  "engines": {
+    "name": "cordova",
+    "version": ">=3.5.0"
+  }
+}

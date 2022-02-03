@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin xmlns="http://apache.org/cordova/ns/plugins/1.0" id="cordova-plugin-saveimage" version="1.0.0">
+    <name>Cordova Plugin Save Image</name>
+    <description>This plugin helps you save images</description>
+    <license>MIT</license>
+    <keywords></keywords>
+    <repo>https://github.com/gecsbernat/cordova-plugin-saveimage</repo>
+    <js-module src="www/SaveImage.js" name="SaveImage">
+        <runs />
+        <clobbers target="SaveImage"/>
+    </js-module>
+    <!-- android -->
+    <platform name="android">
+        <config-file target="res/xml/config.xml" parent="/*">
+            <feature name="SaveImage">
+                <param name="android-package" value="cordova.plugin.saveimage.SaveImage"/>
+                <param name="onload" value="false"/>
+            </feature>
+        </config-file>
+        <config-file target="AndroidManifest.xml" parent="/*">
+            <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+            <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+            <uses-permission android:name="android.permission.INTERNET" />
+        </config-file>
+        <source-file src="src/android/SaveImage.java" target-dir="src/cordova/plugin/saveimage" />
+        <source-file src="src/android/ImageService.java" target-dir="src/cordova/plugin/saveimage" />
+    </platform>
+    <!-- ios -->
+    <platform name="ios">
+        <preference name="PHOTO_LIBRARY_USAGE_DESCRIPTION" default="To save images"/>
+        <config-file target="*-Info.plist" parent="NSPhotoLibraryUsageDescription">
+            <string>$PHOTO_LIBRARY_USAGE_DESCRIPTION</string>
+        </config-file>
+        <config-file target="config.xml" parent="/*">
+            <feature name="SaveImage">
+                <param name="ios-package" value="SaveImage" onload="true"/>
+            </feature>
+        </config-file>
+        <dependency id="cordova-plugin-add-swift-support" version="2.0.2"/>
+        <source-file src="src/ios/SaveImage.swift" />
+        <source-file src="src/ios/ImageService.swift" />
+    </platform>
+</plugin>
