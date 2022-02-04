@@ -59,9 +59,9 @@ public class ImageService {
         saveMedia(context, cordova, fileName, url, album, imageMimeToExtension, filePath -> {
             try {
                 String whereClause = MediaStore.MediaColumns.DATA + " = \"" + filePath + "\"";
-                queryLibrary(context, whereClause, (chunk, chunkNum, isLastChunk) -> completion.run(chunk.size() == 1 ? chunk.get(0) : null));
+                queryLibrary(context, whereClause, (chunk, chunkNum, isLastChunk) -> completion.run(chunk.size() == 1 ? chunk.get(0) : new JSONObject()));
             } catch (Exception e) {
-                completion.run(null);
+                completion.run(new JSONObject());
             }
         });
     }
