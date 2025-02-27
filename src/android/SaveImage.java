@@ -3,6 +3,7 @@ package cordova.plugin.saveimage;
 import android.Manifest;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.os.Build;
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -15,8 +16,9 @@ import java.util.List;
 
 public class SaveImage extends CordovaPlugin {
 
-    private static final String READ_EXTERNAL_STORAGE = android.Manifest.permission.READ_EXTERNAL_STORAGE;
+    private static final String READ_EXTERNAL_STORAGE = Manifest.permission.READ_EXTERNAL_STORAGE;
     private static final String WRITE_EXTERNAL_STORAGE = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+    private static final String READ_MEDIA_IMAGES = "android.permission.READ_MEDIA_IMAGES";
     private static final int REQUEST_AUTHORIZATION_REQ_CODE = 0;
     private static final String ACTION_REQUEST_AUTHORIZATION = "requestAuthorization";
     private static final String ACTION_SAVE_IMAGE = "saveImage";
@@ -32,11 +34,7 @@ public class SaveImage extends CordovaPlugin {
                 final JSONObject options = args.optJSONObject(0);
                 final boolean read = options.getBoolean("read");
                 final boolean write = options.getBoolean("write");
-                if (read && !cordova.hasPermission(READ_EXTERNAL_STORAGE) || write && !cordova.hasPermission(WRITE_EXTERNAL_STORAGE)) {
-                    requestAuthorization(read, write);
-                } else {
-                    callbackContext.success();
-                }
+                requestAppropriatePermissions(read, write);
             } catch (Exception e) {
                 e.printStackTrace();
                 callbackContext.error(e.getMessage());
@@ -47,11 +45,16 @@ public class SaveImage extends CordovaPlugin {
                 final String fileName = args.getString(0);
                 final String url = args.getString(1);
                 final String album = args.getString(2);
-                if (!cordova.hasPermission(WRITE_EXTERNAL_STORAGE)) {
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    // Android 10+ uses scoped storage
+                    service.saveImage(getContext(), cordova, fileName, url, album, callbackContext::success);
+                } else if (!cordova.hasPermission(WRITE_EXTERNAL_STORAGE)) {
                     callbackContext.error(ImageService.PERMISSION_ERROR);
                     return false;
+                } else {
+                    service.saveImage(getContext(), cordova, fileName, url, album, callbackContext::success);
                 }
-                service.saveImage(getContext(), cordova, fileName, url, album, callbackContext::success);
             } catch (Exception e) {
                 e.printStackTrace();
                 callbackContext.error(e.getMessage());
@@ -73,19 +76,40 @@ public class SaveImage extends CordovaPlugin {
         this.callbackContext.success();
     }
 
-    private void requestAuthorization(boolean read, boolean write) {
+    private void requestAppropriatePermissions(boolean read, boolean write) {
         List<String> permissions = new ArrayList<String>();
-        if (read) {
-            permissions.add(READ_EXTERNAL_STORAGE);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+ uses more granular permissions
+            if (read) {
+                permissions.add(READ_MEDIA_IMAGES);
+            }
+            // Write is handled through MediaStore API
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10-12
+            if (read) {
+                permissions.add(READ_EXTERNAL_STORAGE);
+            }
+            // Write is handled through MediaStore API
+        } else {
+            // Android 9 and below
+            if (read) {
+                permissions.add(READ_EXTERNAL_STORAGE);
+            }
+            if (write) {
+                permissions.add(WRITE_EXTERNAL_STORAGE);
+            }
         }
-        if (write) {
-            permissions.add(WRITE_EXTERNAL_STORAGE);
+
+        if (!permissions.isEmpty()) {
+            cordova.requestPermissions(this, REQUEST_AUTHORIZATION_REQ_CODE,
+                    permissions.toArray(new String[0]));
+        } else {
+            this.callbackContext.success();
         }
-        cordova.requestPermissions(this, REQUEST_AUTHORIZATION_REQ_CODE, permissions.toArray(new String[0]));
     }
 
     private Context getContext() {
         return this.cordova.getActivity().getApplicationContext();
     }
-
 }

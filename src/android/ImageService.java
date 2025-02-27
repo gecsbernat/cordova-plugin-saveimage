@@ -1,10 +1,13 @@
 package cordova.plugin.saveimage;
 
+import android.content.ContentResolver;
+import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
 import android.media.ExifInterface;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Environment;
 import android.os.SystemClock;
 import android.provider.MediaStore;
@@ -56,14 +59,126 @@ public class ImageService {
     }
 
     public void saveImage(final Context context, final CordovaInterface cordova, final String fileName, final String url, String album, final JSONObjectRunnable completion) throws IOException, URISyntaxException {
-        saveMedia(context, cordova, fileName, url, album, imageMimeToExtension, filePath -> {
-            try {
-                String whereClause = MediaStore.MediaColumns.DATA + " = \"" + filePath + "\"";
-                queryLibrary(context, whereClause, (chunk, chunkNum, isLastChunk) -> completion.run(chunk.size() == 1 ? chunk.get(0) : new JSONObject()));
-            } catch (Exception e) {
-                completion.run(new JSONObject());
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Use MediaStore API for Android 10+
+            saveMediaUsingMediaStore(context, cordova, fileName, url, album, imageMimeToExtension, filePath -> {
+                try {
+                    String whereClause = MediaStore.MediaColumns.DATA + " = \"" + filePath + "\"";
+                    queryLibrary(context, whereClause, (chunk, chunkNum, isLastChunk) -> completion.run(chunk.size() == 1 ? chunk.get(0) : new JSONObject()));
+                } catch (Exception e) {
+                    completion.run(new JSONObject());
+                }
+            });
+        } else {
+            // Legacy method for older Android versions
+            saveMedia(context, cordova, fileName, url, album, imageMimeToExtension, filePath -> {
+                try {
+                    String whereClause = MediaStore.MediaColumns.DATA + " = \"" + filePath + "\"";
+                    queryLibrary(context, whereClause, (chunk, chunkNum, isLastChunk) -> completion.run(chunk.size() == 1 ? chunk.get(0) : new JSONObject()));
+                } catch (Exception e) {
+                    completion.run(new JSONObject());
+                }
+            });
+        }
+    }
+
+    private void saveMediaUsingMediaStore(Context context, CordovaInterface cordova, String fileName, String url, String album, Map<String, String> mimeToExtension, FilePathRunnable completion) throws IOException, URISyntaxException {
+        ContentResolver resolver = context.getContentResolver();
+        ContentValues contentValues = new ContentValues();
+
+        String mime = "image/jpeg"; // Default
+        String extension = ".jpg";  // Default
+        byte[] imageData = null;
+
+        // Process URL or data URL
+        if (url.startsWith("data:")) {
+            Matcher matcher = dataURLPattern.matcher(url);
+            if (!matcher.find()) {
+                throw new IllegalArgumentException("The dataURL is in incorrect format");
             }
-        });
+            mime = matcher.group(1) + "/" + matcher.group(2);
+            int dataPos = matcher.end();
+            String base64 = url.substring(dataPos);
+            imageData = Base64.decode(base64, Base64.DEFAULT);
+
+            String mimeExtension = mimeToExtension.get(matcher.group(2));
+            if (mimeExtension != null) {
+                extension = mimeExtension;
+            } else {
+                extension = "." + matcher.group(2);
+            }
+        } else {
+            extension = url.contains(".") ? url.substring(url.lastIndexOf(".")) : "";
+            if (extension.contains("jpg") || extension.contains("JPG")) {
+                extension = ".jpg";
+                mime = "image/jpeg";
+            } else if (extension.contains("png") || extension.contains("PNG")) {
+                extension = ".png";
+                mime = "image/png";
+            }
+        }
+
+        // Setup content values for MediaStore
+        contentValues.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName + extension);
+        contentValues.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + "/" + album);
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 1);
+        }
+
+        // Insert the image into MediaStore
+        Uri imageUri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues);
+        if (imageUri == null) {
+            throw new IOException("Failed to create new MediaStore record");
+        }
+
+        try (OutputStream os = resolver.openOutputStream(imageUri)) {
+            if (os == null) {
+                throw new IOException("Failed to open output stream");
+            }
+
+            if (imageData != null) {
+                // Write base64 decoded data
+                os.write(imageData);
+            } else {
+                // Write from URL
+                InputStream is;
+                if (url.startsWith("file:///android_asset/")) {
+                    String assetUrl = url.replace("file:///android_asset/", "");
+                    is = cordova.getActivity().getApplicationContext().getAssets().open(assetUrl);
+                } else {
+                    is = new URL(url).openStream();
+                }
+                copyStream(is, os);
+                is.close();
+            }
+
+            os.flush();
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            contentValues.clear();
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0);
+            resolver.update(imageUri, contentValues, null, null);
+        }
+
+        // Get the file path for the completion callback
+        String[] projection = {MediaStore.Images.Media.DATA};
+        Cursor cursor = resolver.query(imageUri, projection, null, null, null);
+        String filePath = null;
+        if (cursor != null && cursor.moveToFirst()) {
+            int columnIndex = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+            filePath = cursor.getString(columnIndex);
+            cursor.close();
+        }
+
+        if (filePath != null) {
+            completion.run(filePath);
+        } else {
+            // If path couldn't be determined, use URI string as fallback
+            completion.run(imageUri.toString());
+        }
     }
 
     private ArrayList<JSONObject> queryContentProvider(Context context, Uri collection, JSONObject columns, String whereClause) throws JSONException {
@@ -132,11 +247,13 @@ public class ImageService {
             JSONObject queryResult = queryResults.get(i);
             // swap width and height if needed
             try {
-                int orientation = getImageOrientation(new File(queryResult.getString("nativeURL")));
-                if (isOrientationSwapsDimensions(orientation)) { // swap width and height
-                    int tempWidth = queryResult.getInt("width");
-                    queryResult.put("width", queryResult.getInt("height"));
-                    queryResult.put("height", tempWidth);
+                if (queryResult.has("nativeURL") && queryResult.getString("nativeURL") != null) {
+                    int orientation = getImageOrientation(new File(queryResult.getString("nativeURL")));
+                    if (isOrientationSwapsDimensions(orientation)) { // swap width and height
+                        int tempWidth = queryResult.getInt("width");
+                        queryResult.put("width", queryResult.getInt("height"));
+                        queryResult.put("height", tempWidth);
+                    }
                 }
             } catch (IOException e) {
                 // Do nothing
@@ -173,6 +290,9 @@ public class ImageService {
     }
 
     private static int getImageOrientation(File imageFile) throws IOException {
+        if (!imageFile.exists()) {
+            return ExifInterface.ORIENTATION_NORMAL;
+        }
         ExifInterface exif = new ExifInterface(imageFile.getAbsolutePath());
         int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
         return orientation;
@@ -206,8 +326,12 @@ public class ImageService {
 
     private Map<String, String> imageMimeToExtension = new HashMap<String, String>() {{
         put("jpeg", ".jpg");
+        put("png", ".png");
+        put("gif", ".gif");
+        put("webp", ".webp");
     }};
 
+    // Legacy method for Android 9 and below
     private void saveMedia(Context context, CordovaInterface cordova, String fileName, String url, String album, Map<String, String> mimeToExtension, FilePathRunnable completion) throws IOException, URISyntaxException {
         File albumDirectory = makeAlbumInPhotoLibrary(album);
         File targetFile;
@@ -268,5 +392,4 @@ public class ImageService {
     public interface JSONObjectRunnable {
         void run(JSONObject result);
     }
-
 }
